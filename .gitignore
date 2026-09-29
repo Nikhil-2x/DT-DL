@@ -1,0 +1,27 @@
+# Backend runtime/generated files
+backend/data/
+backend/0
+backend/33
+
+# Local SeaweedFS configuration
+backend/seaweed-s3.json
+
+# Go build/output files
+backend/bin/
+backend/*.exe
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/

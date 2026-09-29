@@ -30,6 +30,7 @@ func NewRouter(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/datasets", ds.Upload)
 	mux.HandleFunc("GET /api/v1/datasets", ds.List)
 	mux.HandleFunc("GET /api/v1/datasets/{id}", ds.Get)
+	mux.HandleFunc("GET /api/v1/datasets/{id}/download", ds.Download)
 	mux.HandleFunc("DELETE /api/v1/datasets/{id}", ds.Delete)
 
 	mux.HandleFunc("POST /api/v1/jobs", js.Create)

@@ -72,8 +72,8 @@ func Load(getenv func(string) string) (Config, error) {
 		S3Endpoint: str("S3_ENDPOINT", "http://127.0.0.1:8333"),
 		// A default SeaweedFS started with `server -s3` has auth disabled and
 		// accepts any key pair; "any" mirrors what the Python code uses.
-		S3AccessKey:      str("S3_ACCESS_KEY", "any"),
-		S3SecretKey:      str("S3_SECRET_KEY", "any"),
+		S3AccessKey: str("S3_ACCESS_KEY", "dtdl-access"),
+S3SecretKey: str("S3_SECRET_KEY", "dtdl-secret"),
 		S3Region:         str("S3_REGION", "us-east-1"),
 		DatasetBucket:    str("DATASET_BUCKET", "datasets"),
 		CheckpointBucket: str("CHECKPOINT_BUCKET", "checkpoints"),

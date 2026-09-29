@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"dtdl/backend/internal/apperr"
 	"dtdl/backend/internal/dataset"
@@ -16,6 +17,32 @@ type Datasets struct {
 	maxUpload int64
 }
 
+func (h *Datasets) Download(w http.ResponseWriter, r *http.Request) {
+	d, obj, err := h.svc.Download(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, h.log, err)
+		return
+	}
+	defer obj.Close()
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set(
+		"Content-Disposition",
+		`attachment; filename="`+d.OriginalFilename+`"`,
+	)
+
+	if d.SizeBytes >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(d.SizeBytes, 10))
+	}
+	if _, err := io.Copy(w, obj); err != nil {
+		h.log.Error(
+			"dataset download failed",
+			"event", "dataset_download_failed",
+			"dataset_id", d.ID,
+			"error", err,
+		)
+	}
+}
 func NewDatasets(svc *dataset.Service, maxUpload int64, log *slog.Logger) *Datasets {
 	return &Datasets{svc: svc, log: log, maxUpload: maxUpload}
 }

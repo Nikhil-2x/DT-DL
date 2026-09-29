@@ -86,6 +86,34 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (Dataset, error) {
 	return d, nil
 }
 
+// Download returns the stored dataset object for streaming to the client.
+func (s *Service) Download(ctx context.Context, id string) (Dataset, io.ReadCloser, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return Dataset{}, nil, err
+	}
+
+	if d.Status != StatusReady {
+		return Dataset{}, nil, apperr.Conflict(
+			"DATASET_NOT_READY",
+			"dataset is not ready for download",
+		)
+	}
+
+	obj, err := s.store.Get(ctx, d.Bucket, d.Key)
+	if errors.Is(err, storage.ErrNotFound) {
+		return Dataset{}, nil, apperr.NotFound(
+			"DATASET_OBJECT_NOT_FOUND",
+			"dataset object not found in storage",
+		)
+	}
+	if err != nil {
+		return Dataset{}, nil, apperr.Internal(err)
+	}
+
+	return d, obj, nil
+}
+
 // abort marks the dataset FAILED and removes any partial object. It uses a
 // fresh context because the request context is often what got cancelled.
 func (s *Service) abort(d Dataset) {
