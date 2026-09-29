@@ -1,0 +1,73 @@
+The backend is a web server written in Go. It doesn't train anything. It's the "manager" that takes requests from a website or curl, keeps records, and tells other things (Docker now, Kubernetes later) to do the work. Your Python code still does the training.
+
+How it's organised
+
+Go organises code into packages, which are folders where each folder has one job. Think of a restaurant:
+
+Folder: cmd/server/main.go
+Restaurant analogy: Opening the doors
+What it does: Reads settings, connects everything, starts
+the server
+────────────────────────────────────────
+Folder: internal/http/handlers
+Restaurant analogy: Waiter
+What it does: Receives requests, calls the right service,
+returns JSON. It has no logic of its own.
+────────────────────────────────────────
+Folder: internal/http/middleware
+Restaurant analogy: Door security
+What it does: Runs on every request. Gives it an ID, logs
+it, and catches crashes.
+────────────────────────────────────────
+Folder: internal/dataset, internal/job
+Restaurant analogy: Kitchen / chefs
+What it does: The actual rules: upload a dataset, create,
+start and stop a job
+────────────────────────────────────────
+Folder: internal/storage
+Restaurant analogy: Pantry access
+What it does: Talks to SeaweedFS. Everyone else just says
+"save this file".
+────────────────────────────────────────
+Folder: internal/runner
+Restaurant analogy: Delivery method
+What it does: Actually runs training (a fake mock runner, or
+a docker runner)
+────────────────────────────────────────
+Folder: internal/repository
+Restaurant analogy: Filing cabinet
+What it does: Saves records in a SQLite file so they survive
+restarts
+────────────────────────────────────────
+Folder: internal/config
+Restaurant analogy: Settings
+What it does: Reads environment variables like SERVER_PORT
+────────────────────────────────────────
+Folder: migrations/
+Restaurant analogy: Blueprints
+What it does: SQL that creates the database tables
+
+Go concepts you'll see
+
+- Interface means a list of things something can do, without saying how. ObjectStorage (Put, Get, Delete, List) and JobRunner (Start, Stop, Status, Logs) are examples. The rest of the code only knows the interface. So we can swap SeaweedFS or Docker for something else, like Kubernetes, without touching the API code. Tests do the same, using fakes.
+- Struct is a bundle of fields, like Job{ID, Name, Status...}. It's Go's version of a class or record.
+- Errors are values. Go has no exceptions. Functions return (result, err), and you check if err != nil. You'll see this everywhere.
+- Goroutine (go jobs.Run(...)) is a lightweight background task. One of them checks every 2 seconds whether running jobs have finished.
+- context.Context carries cancellation, so if a client disconnects, work stops.
+
+What a request looks like
+
+POST /jobs/{id}/start goes through these steps:
+1. Middleware assigns a request ID and logs the request.
+2. The handler in jobs.go calls jobService.Start.
+3. The service checks the job is PENDING, builds a structured TrainingSpec, and marks the job QUEUED.
+4. It calls runner.Start(spec). The Docker runner builds an argument list (no shell string, so no injection), the equivalent of torchrun --nproc_per_node=4 train.py --epochs 3 --run-id ....
+5. The job becomes RUNNING and is saved in SQLite.
+6. The background loop later marks it COMPLETED or FAILED.
+
+Status
+
+- ✅ Health, datasets (streamed upload, list, get, delete) and jobs (create, list, get, start, stop, logs) endpoints, all built
+- ✅ Tests pass under go test -race. They use fakes, so no SeaweedFS is needed.
+- ⏳ Not yet done: Dockerfile, docker-compose.yml, docs/architecture.md, and a run against real SeaweedFS. You rejected the Docker command I tried, so I haven't verified the real S3 path yet.
+

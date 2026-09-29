@@ -1,5 +1,0 @@
-1 - Job scheduling
-      - Queues
-2 - Monitoring
-      - Prometheus/Grafana
-      - Websocket with real time data
