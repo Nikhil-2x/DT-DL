@@ -32,6 +32,13 @@ func TestSpecValidate(t *testing.T) {
 		"zero epochs":       func(s *TrainingSpec) { s.Epochs = 0 },
 		"negative cpu":      func(s *TrainingSpec) { s.Resources.CPUCores = -1 },
 		"sharded no prefix": func(s *TrainingSpec) { s.DataMode = "sharded" },
+		"custom no script":  func(s *TrainingSpec) { s.DataMode = "custom" },
+		"custom bad script key": func(s *TrainingSpec) {
+			s.DataMode, s.ScriptBucket, s.ScriptKey = "custom", "scripts", "--evil"
+		},
+		"custom bad dataset": func(s *TrainingSpec) {
+			s.DataMode, s.ScriptBucket, s.ScriptKey, s.DatasetBucket = "custom", "scripts", "id/project.py", "datasets"
+		},
 	}
 	for name, mut := range mutations {
 		s := validSpec()
@@ -69,6 +76,31 @@ func TestDockerRunArgsSharded(t *testing.T) {
 	i := slices.Index(args, "--dataset-prefix")
 	if i < 0 || args[i+1] != "ds1/" || !slices.Contains(args, "--dataset-bucket") {
 		t.Fatalf("dataset args missing: %v", args)
+	}
+}
+
+func TestDockerRunArgsCustom(t *testing.T) {
+	d := NewDocker(DockerConfig{})
+	s := validSpec()
+	s.DataMode, s.ScriptBucket, s.ScriptKey = "custom", "scripts", "s1/project.py"
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	args := d.RunArgs(s)
+	if i := slices.Index(args, "--script-key"); i < 0 || args[i+1] != "s1/project.py" || !slices.Contains(args, "--script-bucket") {
+		t.Fatalf("script args missing: %v", args)
+	}
+	if slices.Contains(args, "--attach-dataset") {
+		t.Fatalf("no dataset attached, but --attach-dataset present: %v", args)
+	}
+
+	s.DatasetBucket, s.DatasetPrefix = "datasets", "d1/"
+	args = d.RunArgs(s)
+	if !slices.Contains(args, "--attach-dataset") || args[slices.Index(args, "--dataset-prefix")+1] != "d1/" {
+		t.Fatalf("dataset args missing: %v", args)
+	}
+	if args[slices.Index(args, "--data")+1] != "custom" {
+		t.Fatalf("--data custom missing: %v", args)
 	}
 }
 

@@ -24,6 +24,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+import project_loader
 from data import ShardedFileDataset, get_dataset
 from dataset_shard import fetch_rank_shard
 from model import SmallCNN
@@ -35,8 +36,17 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=0.01)
-    parser.add_argument("--data", choices=["synthetic", "cifar10", "sharded"], default="synthetic",
-                         help="'sharded' downloads only this rank's slice of a dataset from S3 (see dataset_shard.py)")
+    parser.add_argument("--data", choices=["synthetic", "cifar10", "sharded", "custom"], default="synthetic",
+                         help="'sharded' downloads only this rank's slice of a dataset from S3 (see dataset_shard.py); "
+                              "'custom' trains the user's own project script (see project_loader.py)")
+    parser.add_argument("--script-bucket", default="scripts",
+                         help="custom mode: bucket holding the user's script")
+    parser.add_argument("--script-key", default="",
+                         help="custom mode: object key of the user's script in --script-bucket")
+    parser.add_argument("--script-path", default="",
+                         help="custom mode: use this local file instead of downloading from S3 (local testing)")
+    parser.add_argument("--attach-dataset", action="store_true",
+                         help="custom mode: download --dataset-bucket/--dataset-prefix and pass its folder to get_dataset()")
     parser.add_argument("--dataset-bucket", default="datasets")
     parser.add_argument("--dataset-prefix", default="demo100")
     parser.add_argument("--dataset-local-dir", default="./shard_data",
@@ -66,6 +76,48 @@ def build_checkpoint_store(args):
     return LocalCheckpointStore(os.path.join(args.checkpoint_dir, args.run_id))
 
 
+def load_custom_project(args, rank: int) -> project_loader.UserProject:
+    """--data custom: fetch the user's script (and dataset), validate the
+    plug-in contract and build the model/data/loss it describes."""
+    s3 = None
+    if not args.script_path or args.attach_dataset:
+        import boto3
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=args.s3_endpoint,
+            aws_access_key_id=args.s3_access_key,
+            aws_secret_access_key=args.s3_secret_key,
+        )
+
+    script_path = args.script_path
+    if not script_path:
+        if not args.script_key:
+            raise project_loader.ContractError("--data custom needs --script-key (or --script-path)")
+        script_path = project_loader.fetch_script(
+            s3, args.script_bucket, args.script_key, project_loader.default_script_dir(rank)
+        )
+
+    data_dir = None
+    if args.attach_dataset:
+        data_dir = project_loader.stage_dataset(
+            s3,
+            args.dataset_bucket,
+            args.dataset_prefix,
+            args.dataset_local_dir,
+            is_local_leader=int(os.environ.get("LOCAL_RANK", "0")) == 0,
+            barrier=dist.barrier,
+        )
+
+    torch.manual_seed(0)  # identical initial weights on every rank, whatever the user's code consumed
+    project = project_loader.load_project(script_path, data_dir)
+    print(f"[rank {rank}] custom project loaded: model={type(project.model).__name__} "
+          f"params={sum(p.numel() for p in project.model.parameters())} "
+          f"dataset={type(project.dataset).__name__} samples={len(project.dataset)} "
+          f"data_dir={data_dir}", flush=True)
+    return project
+
+
 def params_checksum(model: nn.Module) -> float:
     """Sum of all parameter values - used only to prove weights are in
     sync across ranks after each DDP allreduce + optimizer step."""
@@ -76,13 +128,22 @@ def run(rank: int, world_size: int, args) -> None:
     """One worker's full training loop. Called directly by torchrun's
     per-process main() below, or by run_local.py via mp.spawn."""
     torch.manual_seed(0)  # same initial weights on every rank before DDP broadcast
-    model = SmallCNN()
+    project = load_custom_project(args, rank) if args.data == "custom" else None
+    model = project.model if project else SmallCNN()
     ddp_model = DDP(model)
 
-    optimizer = torch.optim.SGD(ddp_model.parameters(), lr=args.lr, momentum=0.9)
-    criterion = nn.CrossEntropyLoss()
+    if project:
+        optimizer = project.build_optimizer(model, args.lr)
+        criterion = project.criterion
+    else:
+        optimizer = torch.optim.SGD(ddp_model.parameters(), lr=args.lr, momentum=0.9)
+        criterion = nn.CrossEntropyLoss()
 
-    if args.data == "sharded":
+    if args.data == "custom":
+        dataset = project.dataset
+        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=0)
+        loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler)
+    elif args.data == "sharded":
         # Physical sharding: this rank downloads ONLY its own slice of the
         # dataset from S3 - it never has the other ranks' files at all,
         # unlike synthetic/cifar10 below where every rank gets the full
@@ -160,7 +221,14 @@ def main():
     come from the environment torchrun sets up."""
     args = parse_args()
     dist.init_process_group(backend="gloo")
-    run(dist.get_rank(), dist.get_world_size(), args)
+    rank = dist.get_rank()
+    try:
+        run(rank, dist.get_world_size(), args)
+    except project_loader.ContractError as e:
+        # A problem in the user's project, not in the platform: say so plainly
+        # in the job log, then exit non-zero so the job is marked FAILED.
+        print(f"[rank {rank}] PROJECT ERROR: {e}", flush=True)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

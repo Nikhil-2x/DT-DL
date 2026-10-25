@@ -1,0 +1,120 @@
+### Distributed ML Platform - Backend API
+###
+### Requires the VS Code "REST Client" extension (humao.rest-client).
+### Open this file, then click "Send Request" above each block, top to
+### bottom - requests below reuse IDs from earlier responses automatically.
+###
+### Before running: backend must be up on @baseUrl (see backend/README.md):
+###   cd backend && SERVER_PORT=8090 go run ./cmd/server
+### and SeaweedFS must be running (S3 endpoint the backend talks to).
+
+@baseUrl = http://127.0.0.1:8090/api/v1
+
+
+### 1. Health check
+# Expected: 200 {"status":"ok"}
+GET {{baseUrl}}/health
+
+
+### 2. Upload a dataset (streamed multipart upload)
+# Expected: 201 {"id":"...","name":"sample","original_filename":"sample.csv",
+#   "bucket":"datasets","key":"<id>/sample.csv","size_bytes":12,"status":"READY", ...}
+# @name uploadDataset
+POST {{baseUrl}}/datasets
+Content-Type: multipart/form-data; boundary=----DtdlBoundary
+
+------DtdlBoundary
+Content-Disposition: form-data; name="name"
+
+sample
+------DtdlBoundary
+Content-Disposition: form-data; name="file"; filename="sample.csv"
+Content-Type: text/csv
+
+< ./sample.csv
+------DtdlBoundary--
+
+@datasetId = {{uploadDataset.response.body.$.id}}
+
+
+### 3. List all datasets
+# Expected: 200 {"datasets":[{...}]}
+GET {{baseUrl}}/datasets
+
+
+### 4. Get one dataset by id
+# Expected: 200 {"id":"...","name":"sample", ...}
+GET {{baseUrl}}/datasets/{{datasetId}}
+
+
+### 5. Get a dataset that doesn't exist (error shape)
+# Expected: 404 {"error":{"code":"DATASET_NOT_FOUND","message":"dataset not found"}}
+GET {{baseUrl}}/datasets/does-not-exist
+
+
+### 6. Create a training job (mock or docker runner, depending on how the
+### server was started - see backend/README.md's RUNNER env var)
+# Expected: 201 {"id":"...","name":"api-demo","status":"PENDING", ...}
+# @name createJob
+POST {{baseUrl}}/jobs
+Content-Type: application/json
+
+{
+  "name": "api-demo",
+  "epochs": 3,
+  "workers": 4
+}
+
+@jobId = {{createJob.response.body.$.id}}
+
+
+### 7. List all jobs
+# Expected: 200 {"jobs":[{...}]}
+GET {{baseUrl}}/jobs
+
+
+### 8. Get one job by id
+# Expected: 200 {"id":"...","status":"PENDING", ...}
+GET {{baseUrl}}/jobs/{{jobId}}
+
+
+### 9. Start the job
+# Expected: 200 {"id":"...","status":"RUNNING","started_at":"...", ...}
+POST {{baseUrl}}/jobs/{{jobId}}/start
+
+
+### 10. Check status again (wait a few seconds after Start, then re-run)
+# Expected: 200 {"id":"...","status":"RUNNING" or "COMPLETED", ...}
+GET {{baseUrl}}/jobs/{{jobId}}
+
+
+### 11. Read the job's training logs
+# Expected: 200 text/plain, lines like:
+#   [rank 0] epoch 0 avg_loss=2.30 param_checksum=... time=...
+GET {{baseUrl}}/jobs/{{jobId}}/logs?tail=50
+
+
+### 12. Stop the job (only meaningful while it's still RUNNING)
+# Expected: 202 {"id":"...","status":"STOPPING" or "STOPPED", ...}
+POST {{baseUrl}}/jobs/{{jobId}}/stop
+
+
+### 13. Create a job with an invalid field (validation error shape)
+# Expected: 400 {"error":{"code":"...","message":"..."}}
+POST {{baseUrl}}/jobs
+Content-Type: application/json
+
+{
+  "name": "",
+  "epochs": 0
+}
+
+
+### 14. Delete the dataset created in step 2 (run this last)
+# Expected: 204 No Content
+DELETE {{baseUrl}}/datasets/{{datasetId}}
+
+
+### 15. Unknown route (uniform 404 error shape)
+# Expected: 404 {"error":{"code":"ROUTE_NOT_FOUND","message":"no such route"}}
+GET {{baseUrl}}/nonexistent

@@ -18,10 +18,12 @@ type Jobs struct {
 func NewJobs(svc *job.Service, log *slog.Logger) *Jobs { return &Jobs{svc: svc, log: log} }
 
 // createJobRequest is the public shape of POST /jobs. It deliberately has no
-// image, command or script fields: clients choose parameters, not code.
+// image or command fields: clients choose parameters (and may reference an
+// uploaded project script by id), never an arbitrary command or image.
 type createJobRequest struct {
 	Name      string `json:"name"`
 	DatasetID string `json:"dataset_id"`
+	ScriptID  string `json:"script_id"`
 	Epochs    int    `json:"epochs"`
 	Workers   int    `json:"workers"`
 	DataMode  string `json:"data_mode"`
@@ -78,6 +80,45 @@ func (h *Jobs) Stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, j)
+}
+
+// Artifacts lists the checkpoints a job has saved.
+func (h *Jobs) Artifacts(w http.ResponseWriter, r *http.Request) {
+	list, err := h.svc.Artifacts(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, h.log, err)
+		return
+	}
+	resp := map[string]any{"artifacts": list}
+	if len(list) > 0 {
+		resp["latest_epoch"] = list[len(list)-1].Epoch
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// Model downloads a checkpoint file (the latest, or ?epoch=N). The file is a
+// PyTorch checkpoint: {"model_state", "optimizer_state", "epoch"}.
+func (h *Jobs) Model(w http.ResponseWriter, r *http.Request) {
+	epoch := -1
+	if v := r.URL.Query().Get("epoch"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, r, h.log, apperr.Invalid("INVALID_EPOCH", "epoch must be a non-negative integer"))
+			return
+		}
+		epoch = n
+	}
+	id := r.PathValue("id")
+	a, rc, err := h.svc.Model(r.Context(), id, epoch)
+	if err != nil {
+		writeError(w, r, h.log, err)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(a.SizeBytes, 10))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+id+"-"+a.Name+`"`)
+	_, _ = io.Copy(w, rc)
 }
 
 // Logs returns plain-text logs; ?tail=N limits to the last N lines.

@@ -73,6 +73,22 @@ func Logging(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
+// CORS allows any origin to call the API with any method/header. Fine for
+// local development against a browser-based UI; a real deployment should
+// restrict this to the frontend's actual origin.
+func CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Recover turns panics into a JSON 500 without leaking details to clients.
 func Recover(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

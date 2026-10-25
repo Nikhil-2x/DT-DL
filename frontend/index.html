@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Distributed ML Platform</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --border: #2a2e3a;
+    --text: #e6e8ee;
+    --muted: #9aa0ad;
+    --accent: #5b8def;
+    --green: #3ecf8e;
+    --red: #f0605b;
+    --yellow: #e0b03f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .conn { font-size: 12px; padding: 4px 10px; border-radius: 999px; }
+  .conn.ok { background: rgba(62,207,142,.15); color: var(--green); }
+  .conn.bad { background: rgba(240,96,91,.15); color: var(--red); }
+
+  nav { display: flex; gap: 4px; padding: 0 28px; border-bottom: 1px solid var(--border); }
+  nav button {
+    background: none; border: none; color: var(--muted); padding: 12px 16px;
+    cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { padding: 24px 28px; max-width: 1000px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 20px; }
+  .panel h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  form.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  input, select {
+    background: #0f1117; border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-size: 13px; min-width: 120px;
+  }
+  input[type=file] { padding: 6px; }
+  button.btn {
+    background: var(--accent); color: white; border: none; padding: 9px 16px;
+    border-radius: 6px; font-size: 13px; cursor: pointer; font-weight: 500;
+  }
+  button.btn:hover { opacity: .9; }
+  button.btn.secondary { background: var(--border); }
+  button.btn.danger { background: var(--red); }
+  button.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 6px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .actions { display: flex; gap: 6px; }
+  .actions button { padding: 5px 10px; font-size: 12px; }
+
+  .badge { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+  .badge.PENDING, .badge.QUEUED { background: rgba(224,176,63,.15); color: var(--yellow); }
+  .badge.RUNNING, .badge.STOPPING { background: rgba(91,141,239,.15); color: var(--accent); }
+  .badge.COMPLETED { background: rgba(62,207,142,.15); color: var(--green); }
+  .badge.FAILED { background: rgba(240,96,91,.15); color: var(--red); }
+  .badge.STOPPED { background: rgba(154,160,173,.15); color: var(--muted); }
+
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  .error-banner { background: rgba(240,96,91,.12); color: var(--red); padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; display: none; }
+
+  pre.logs {
+    background: #0a0b10; border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px; font-size: 12px; line-height: 1.6; max-height: 360px;
+    overflow-y: auto; white-space: pre-wrap; color: #b8f0d0;
+  }
+  .log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .log-header .title { font-size: 13px; color: var(--text); }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; line-height: 1.5; }
+  .hint code { background: #0f1117; padding: 1px 5px; border-radius: 4px; color: var(--text); }
+  .hint a { color: var(--accent); }
+  .close-x { cursor: pointer; color: var(--muted); background: none; border: none; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Distributed ML Training Platform</h1>
+    <div class="sub">Control plane UI - talks directly to the Go backend</div>
+  </div>
+  <div id="conn" class="conn bad">checking...</div>
+</header>
+
+<nav>
+  <button class="tab active" data-tab="datasets">Datasets</button>
+  <button class="tab" data-tab="scripts">Scripts</button>
+  <button class="tab" data-tab="jobs">Jobs</button>
+</nav>
+
+<main>
+  <div id="error" class="error-banner"></div>
+
+  <!-- DATASETS TAB -->
+  <section id="tab-datasets">
+    <div class="panel">
+      <h2>Upload dataset</h2>
+      <form class="row" id="upload-form">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" name="name" placeholder="optional" />
+        </div>
+        <div class="field">
+          <label>File</label>
+          <input type="file" name="file" required />
+        </div>
+        <button class="btn" type="submit">Upload</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Datasets</h2>
+      <table>
+        <thead><tr><th>Name</th><th>File</th><th>Size</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody id="dataset-rows"></tbody>
+      </table>
+      <div id="dataset-empty" class="empty" style="display:none">No datasets uploaded yet.</div>
+    </div>
+  </section>
+
+  <!-- SCRIPTS TAB -->
+  <section id="tab-scripts" style="display:none">
+    <div class="panel">
+      <h2>Upload training project (.py)</h2>
+      <p class="hint">
+        One Python file that defines <code>build_model()</code> and <code>get_dataset(data_dir)</code>.
+        The platform adds distributed training, data sharding, checkpoints and logs.
+        <a href="#" id="template-link">View the template</a>
+      </p>
+      <form class="row" id="script-form">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" name="name" placeholder="optional" />
+        </div>
+        <div class="field">
+          <label>Script</label>
+          <input type="file" name="file" accept=".py" required />
+        </div>
+        <button class="btn" type="submit">Upload</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Scripts</h2>
+      <table>
+        <thead><tr><th>Name</th><th>File</th><th>Size</th><th>Created</th><th></th></tr></thead>
+        <tbody id="script-rows"></tbody>
+      </table>
+      <div id="script-empty" class="empty" style="display:none">No scripts uploaded yet.</div>
+    </div>
+
+    <div class="panel" id="source-panel" style="display:none">
+      <div class="log-header">
+        <div class="title" id="source-title"></div>
+        <button class="close-x" id="close-source">close ✕</button>
+      </div>
+      <pre class="logs" id="source-body"></pre>
+    </div>
+  </section>
+
+  <!-- JOBS TAB -->
+  <section id="tab-jobs" style="display:none">
+    <div class="panel">
+      <h2>Create training job</h2>
+      <form class="row" id="job-form">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" name="name" required placeholder="cifar-demo" />
+        </div>
+        <div class="field">
+          <label>Epochs</label>
+          <input type="number" name="epochs" required value="3" min="1" style="width:80px" />
+        </div>
+        <div class="field">
+          <label>Workers</label>
+          <input type="number" name="workers" value="4" min="1" style="width:80px" />
+        </div>
+        <div class="field">
+          <label>Project script</label>
+          <select name="script_id" id="job-script">
+            <option value="">none (built-in model)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Dataset</label>
+          <select name="dataset_id" id="job-dataset">
+            <option value="">none</option>
+          </select>
+        </div>
+        <div class="field" id="data-mode-field">
+          <label>Data mode (built-in model)</label>
+          <select name="data_mode">
+            <option value="synthetic">synthetic</option>
+            <option value="cifar10">cifar10</option>
+            <option value="sharded">sharded</option>
+          </select>
+        </div>
+        <button class="btn" type="submit">Create job</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Jobs</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Status</th><th>Workers</th><th>Epochs</th><th>Created</th><th></th></tr></thead>
+        <tbody id="job-rows"></tbody>
+      </table>
+      <div id="job-empty" class="empty" style="display:none">No jobs yet.</div>
+    </div>
+
+    <div class="panel" id="log-panel" style="display:none">
+      <div class="log-header">
+        <div class="title">Logs - <span id="log-job-name"></span></div>
+        <button class="close-x" id="close-logs">close ✕</button>
+      </div>
+      <pre class="logs" id="log-body">(loading...)</pre>
+    </div>
+  </section>
+</main>
+
+<script>
+const API = "http://127.0.0.1:8090/api/v1";
+let activeLogJobId = null;
+let pollHandle = null;
+
+function showError(msg) {
+  const el = document.getElementById("error");
+  el.textContent = msg;
+  el.style.display = "block";
+  clearTimeout(showError._t);
+  showError._t = setTimeout(() => (el.style.display = "none"), 6000);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(API + path, options);
+  if (!res.ok) {
+    let msg = res.status + " " + res.statusText;
+    try {
+      const body = await res.json();
+      if (body.error) msg = body.error.code + ": " + body.error.message;
+    } catch (_) {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return null;
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : res.text();
+}
+
+// ---------- connection / health ----------
+async function checkHealth() {
+  const el = document.getElementById("conn");
+  try {
+    await api("/health");
+    el.textContent = "backend connected";
+    el.className = "conn ok";
+  } catch (e) {
+    el.textContent = "backend unreachable";
+    el.className = "conn bad";
+  }
+}
+
+// ---------- tabs ----------
+document.querySelectorAll("nav .tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("nav .tab").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    ["datasets", "scripts", "jobs"].forEach(t => {
+      document.getElementById("tab-" + t).style.display = btn.dataset.tab === t ? "" : "none";
+    });
+  });
+});
+
+// ---------- datasets ----------
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+function fmtDate(s) { return new Date(s).toLocaleString(); }
+function esc(v) {
+  return String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Fill a <select> with options, keeping the current choice if it still exists.
+function fillSelect(sel, items, label) {
+  const keep = sel.value;
+  sel.innerHTML = "";
+  sel.appendChild(new Option(label, ""));
+  items.forEach(it => sel.appendChild(new Option(it.name, it.id)));
+  if (items.some(it => it.id === keep)) sel.value = keep;
+}
+
+async function loadDatasets() {
+  try {
+    const { datasets } = await api("/datasets");
+    const rows = document.getElementById("dataset-rows");
+    const empty = document.getElementById("dataset-empty");
+    rows.innerHTML = "";
+    empty.style.display = (!datasets || datasets.length === 0) ? "block" : "none";
+    (datasets || []).forEach(d => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${d.name}</td>
+        <td>${d.original_filename}</td>
+        <td>${fmtBytes(d.size_bytes)}</td>
+        <td><span class="badge ${d.status}">${d.status}</span></td>
+        <td>${fmtDate(d.created_at)}</td>
+        <td class="actions"><button class="btn danger" data-id="${d.id}">Delete</button></td>
+      `;
+      tr.querySelector("button").addEventListener("click", () => deleteDataset(d.id));
+      rows.appendChild(tr);
+    });
+    fillSelect(document.getElementById("job-dataset"),
+      (datasets || []).filter(d => d.status === "READY"), "none");
+  } catch (e) { showError("Failed to load datasets: " + e.message); }
+}
+
+async function deleteDataset(id) {
+  try {
+    await api("/datasets/" + id, { method: "DELETE" });
+    loadDatasets();
+  } catch (e) { showError("Delete failed: " + e.message); }
+}
+
+document.getElementById("upload-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  try {
+    await api("/datasets", { method: "POST", body: fd });
+    form.reset();
+    loadDatasets();
+  } catch (e) { showError("Upload failed: " + e.message); }
+});
+
+// ---------- scripts ----------
+async function loadScripts() {
+  try {
+    const { scripts } = await api("/scripts");
+    const rows = document.getElementById("script-rows");
+    const empty = document.getElementById("script-empty");
+    rows.innerHTML = "";
+    empty.style.display = (!scripts || scripts.length === 0) ? "block" : "none";
+    (scripts || []).forEach(sc => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${esc(sc.name)}</td>
+        <td>${esc(sc.original_filename)}</td>
+        <td>${fmtBytes(sc.size_bytes)}</td>
+        <td>${fmtDate(sc.created_at)}</td>
+        <td class="actions">
+          <button class="btn secondary" data-act="view">View</button>
+          <button class="btn danger" data-act="delete">Delete</button>
+        </td>
+      `;
+      tr.querySelector('[data-act="view"]').addEventListener("click", () => showSource("/scripts/" + sc.id + "/content", sc.name));
+      tr.querySelector('[data-act="delete"]').addEventListener("click", () => deleteScript(sc.id));
+      rows.appendChild(tr);
+    });
+    fillSelect(document.getElementById("job-script"), scripts || [], "none (built-in model)");
+    syncDataModeField();
+  } catch (e) { showError("Failed to load scripts: " + e.message); }
+}
+
+async function showSource(path, title) {
+  try {
+    const text = await api(path);
+    document.getElementById("source-title").textContent = title;
+    document.getElementById("source-body").textContent = text;
+    document.getElementById("source-panel").style.display = "";
+  } catch (e) { showError("Could not load source: " + e.message); }
+}
+document.getElementById("template-link").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  showSource("/scripts/template", "Template: copy it, edit build_model() and get_dataset()");
+});
+document.getElementById("close-source").addEventListener("click", () => {
+  document.getElementById("source-panel").style.display = "none";
+});
+
+async function deleteScript(id) {
+  try {
+    await api("/scripts/" + id, { method: "DELETE" });
+    loadScripts();
+  } catch (e) { showError("Delete failed: " + e.message); }
+}
+
+document.getElementById("script-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  try {
+    await api("/scripts", { method: "POST", body: new FormData(form) });
+    form.reset();
+    loadScripts();
+  } catch (e) { showError("Script upload failed: " + e.message); }
+});
+
+// The built-in data mode only applies when no project script is chosen.
+function syncDataModeField() {
+  const custom = document.getElementById("job-script").value !== "";
+  document.getElementById("data-mode-field").style.display = custom ? "none" : "";
+}
+document.getElementById("job-script").addEventListener("change", syncDataModeField);
+
+// ---------- jobs ----------
+async function loadJobs() {
+  try {
+    const { jobs } = await api("/jobs");
+    const rows = document.getElementById("job-rows");
+    const empty = document.getElementById("job-empty");
+    rows.innerHTML = "";
+    empty.style.display = (!jobs || jobs.length === 0) ? "block" : "none";
+    (jobs || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).forEach(j => {
+      const tr = document.createElement("tr");
+      const canStart = j.status === "PENDING";
+      const canStop = j.status === "RUNNING" || j.status === "QUEUED";
+      tr.innerHTML = `
+        <td>${esc(j.name)}${j.script_id ? ' <span class="badge STOPPED">custom</span>' : ""}</td>
+        <td><span class="badge ${j.status}">${j.status}</span></td>
+        <td>${j.workers}</td>
+        <td>${j.epochs}</td>
+        <td>${fmtDate(j.created_at)}</td>
+        <td class="actions">
+          <button class="btn" data-act="start" ${canStart ? "" : "disabled"}>Start</button>
+          <button class="btn secondary" data-act="stop" ${canStop ? "" : "disabled"}>Stop</button>
+          <button class="btn secondary" data-act="logs">Logs</button>
+          <button class="btn secondary" data-act="model" ${j.status === "COMPLETED" ? "" : "disabled"}>Model</button>
+        </td>
+      `;
+      tr.querySelector('[data-act="start"]').addEventListener("click", () => startJob(j.id));
+      tr.querySelector('[data-act="stop"]').addEventListener("click", () => stopJob(j.id));
+      tr.querySelector('[data-act="logs"]').addEventListener("click", () => openLogs(j.id, j.name));
+      tr.querySelector('[data-act="model"]').addEventListener("click", () => downloadModel(j.id));
+      rows.appendChild(tr);
+    });
+  } catch (e) { showError("Failed to load jobs: " + e.message); }
+}
+
+document.getElementById("job-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const payload = {
+    name: fd.get("name"),
+    epochs: parseInt(fd.get("epochs"), 10),
+    workers: parseInt(fd.get("workers"), 10),
+  };
+  if (fd.get("script_id")) {
+    payload.script_id = fd.get("script_id");          // server implies data_mode "custom"
+    if (fd.get("dataset_id")) payload.dataset_id = fd.get("dataset_id");
+  } else {
+    payload.data_mode = fd.get("data_mode");
+    if (fd.get("dataset_id")) payload.dataset_id = fd.get("dataset_id");
+  }
+  try {
+    await api("/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    form.reset();
+    syncDataModeField();
+    loadJobs();
+  } catch (e) { showError("Create job failed: " + e.message); }
+});
+
+// The browser downloads the latest checkpoint (a PyTorch .pt file).
+function downloadModel(id) {
+  window.location.href = API + "/jobs/" + id + "/model";
+}
+
+async function startJob(id) {
+  try { await api("/jobs/" + id + "/start", { method: "POST" }); loadJobs(); }
+  catch (e) { showError("Start failed: " + e.message); }
+}
+async function stopJob(id) {
+  try { await api("/jobs/" + id + "/stop", { method: "POST" }); loadJobs(); }
+  catch (e) { showError("Stop failed: " + e.message); }
+}
+
+// ---------- logs (auto-refreshing) ----------
+function openLogs(id, name) {
+  activeLogJobId = id;
+  document.getElementById("log-panel").style.display = "";
+  document.getElementById("log-job-name").textContent = name;
+  refreshLogs();
+  clearInterval(pollHandle);
+  pollHandle = setInterval(refreshLogs, 2000);
+}
+document.getElementById("close-logs").addEventListener("click", () => {
+  activeLogJobId = null;
+  clearInterval(pollHandle);
+  document.getElementById("log-panel").style.display = "none";
+});
+async function refreshLogs() {
+  if (!activeLogJobId) return;
+  try {
+    const text = await api("/jobs/" + activeLogJobId + "/logs?tail=200");
+    const body = document.getElementById("log-body");
+    body.textContent = text || "(no logs yet)";
+    body.scrollTop = body.scrollHeight;
+  } catch (e) {
+    document.getElementById("log-body").textContent = "Failed to load logs: " + e.message;
+  }
+}
+
+// ---------- bootstrap ----------
+checkHealth();
+loadDatasets();
+loadScripts();
+loadJobs();
+setInterval(checkHealth, 5000);
+setInterval(loadJobs, 3000);
+setInterval(loadDatasets, 5000);
+setInterval(loadScripts, 8000);
+</script>
+
+</body>
+</html>

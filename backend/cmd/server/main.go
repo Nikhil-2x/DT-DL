@@ -17,6 +17,7 @@ import (
 	"dtdl/backend/internal/job"
 	"dtdl/backend/internal/repository"
 	"dtdl/backend/internal/runner"
+	"dtdl/backend/internal/script"
 	"dtdl/backend/internal/storage"
 )
 
@@ -49,7 +50,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	for _, b := range []string{cfg.DatasetBucket, cfg.CheckpointBucket} {
+	for _, b := range []string{cfg.DatasetBucket, cfg.CheckpointBucket, cfg.ScriptBucket} {
 		bctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := store.EnsureBucket(bctx, b)
 		cancel()
@@ -75,6 +76,10 @@ func run() error {
 		CheckpointBucket: cfg.CheckpointBucket, MaxWorkers: cfg.MaxWorkers,
 	}, log)
 	datasets.SetUsageChecker(jobs)
+	jobs.SetArtifacts(store, cfg.CheckpointBucket)
+	scripts := script.NewService(repository.NewScriptRepo(db), store, cfg.ScriptBucket, cfg.MaxScriptBytes, log)
+	jobs.SetScripts(scripts)
+	scripts.SetUsageChecker(jobs)
 
 	if err := datasets.RecoverInterrupted(ctx); err != nil {
 		return err
@@ -85,7 +90,8 @@ func run() error {
 	srv := &http.Server{
 		Addr: net.JoinHostPort("", cfg.ServerPort),
 		Handler: handlers.NewRouter(handlers.Deps{
-			Datasets: datasets, Jobs: jobs, MaxUploadBytes: cfg.MaxUploadBytes, Log: log,
+			Datasets: datasets, Jobs: jobs, Scripts: scripts, MaxUploadBytes: cfg.MaxUploadBytes,
+				MaxScriptBytes: cfg.MaxScriptBytes, Log: log,
 		}),
 		// No Read/WriteTimeout: they would cut off large uploads and log
 		// streams. Slow-header attacks are covered by ReadHeaderTimeout.

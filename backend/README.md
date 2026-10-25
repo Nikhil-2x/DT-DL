@@ -19,7 +19,8 @@ torchrun --nproc_per_node=4 train.py --epochs 3 --run-id <job-id> --storage s3 .
 
 | Piece | State |
 |---|---|
-| REST API (health, datasets, jobs, logs) | Done |
+| REST API (health, datasets, scripts, jobs, logs) | Done |
+| User-supplied training projects (`build_model()` / `get_dataset()` script) | Done, see below |
 | SeaweedFS storage via S3 API (streaming upload) | Done |
 | SQLite persistence + migrations | Done |
 | `mock` runner (simulated training) | Done |
@@ -72,6 +73,8 @@ RUNNER=docker go run ./cmd/server
 | `RUNNER` | `mock` | `mock` or `docker` |
 | `TRAINING_IMAGE` | `ml-runner:dev` | Image used by the docker runner |
 | `RUNNER_S3_ENDPOINT` | `http://host.docker.internal:8333` | S3 endpoint as seen **from inside** training containers |
+| `SCRIPT_BUCKET` | `scripts` | Bucket for uploaded project scripts |
+| `MAX_SCRIPT_BYTES` | `1048576` (1 MiB) | Max size of a project script |
 | `MAX_WORKERS` | `8` | Max workers per job |
 | `MOCK_EPOCH_DURATION` | `2s` | How long one fake epoch takes (mock runner) |
 | `RECONCILE_INTERVAL` | `2s` | How often job status is refreshed |
@@ -112,6 +115,59 @@ Errors always look like:
 {"error": {"code": "JOB_NOT_FOUND", "message": "job not found"}}
 ```
 
+## Bring your own model and data (project scripts)
+
+Different projects need different models and datasets, so a job can train a
+**user-supplied Python file** instead of the built-in CNN. The file only says
+*what* to train; the platform adds distributed training (torchrun + DDP), data
+splitting across workers, checkpoints, resume and logging.
+
+The file must define two top-level functions (optional ones in brackets):
+
+```python
+def build_model():             # -> torch.nn.Module   (or build_model(dataset) to size it from the data)
+def get_dataset(data_dir):     # -> torch Dataset yielding (input, target); data_dir is None if no dataset
+[def build_optimizer(model, lr)]   # default SGD(momentum=0.9)
+[def build_loss()]                 # default CrossEntropyLoss
+```
+
+```bash
+# get a runnable starting point
+curl localhost:8080/api/v1/scripts/template > project.py
+
+# upload it (the file must be .py and define the two functions)
+curl -F name=my-model -F file=@project.py localhost:8080/api/v1/scripts
+
+# optional: upload data (a .zip is unpacked into data_dir; other files are copied as-is)
+curl -F name=blobs -F file=@blobs.csv localhost:8080/api/v1/datasets
+
+# train it on 4 workers
+curl -X POST localhost:8080/api/v1/jobs -H 'Content-Type: application/json' \
+  -d '{"name":"mine","epochs":5,"workers":4,"script_id":"<script-id>","dataset_id":"<dataset-id>"}'
+curl -X POST localhost:8080/api/v1/jobs/<job-id>/start
+```
+
+Other script endpoints: `GET /scripts`, `GET /scripts/{id}`,
+`GET /scripts/{id}/content`, `DELETE /scripts/{id}` (blocked while an unfinished
+job uses it). Examples live in `../Shared-storage/ml-runner/examples/`:
+`image_classifier.py` (any zip of images, one folder per class; try it with
+`shapes.zip` from `make_shapes_dataset.py`), `cifar10_classifier.py` (downloads
+CIFAR-10 itself, no dataset upload needed) and `csv_classifier.py` (tabular).
+
+How it works: the script is stored in SeaweedFS as `scripts/<id>/project.py`.
+For a `custom` job the backend starts the same `torchrun ... train.py`
+container with `--data custom --script-key ...` (and `--attach-dataset` if a
+dataset is chosen). Inside, rank 0 of each machine downloads the dataset, every
+rank imports the script and checks the contract, runs one sample forward pass
+to catch model/data/loss mismatches early, and then trains with DDP. A contract
+problem is reported in the job logs as `PROJECT ERROR: ...` and the job FAILS.
+
+**Security:** the script is arbitrary Python and runs inside the training
+container, with the container's S3 credentials in its environment. Only
+trusted users should be able to upload scripts until authentication and
+sandboxing exist. The API still accepts no image or command from clients, and
+the backend itself never executes the script.
+
 ### Job lifecycle
 
 ```
@@ -123,10 +179,11 @@ PENDING -> QUEUED -> RUNNING -> COMPLETED
 ### Job request fields
 
 `name` and `epochs` are required. Optional: `workers` (default 1),
-`dataset_id`, `data_mode` (`synthetic`, `cifar10`, `sharded`), `gpus`,
+`dataset_id`, `script_id` (a project script; implies `data_mode` `custom`),
+`data_mode` (`synthetic`, `cifar10`, `sharded`, `custom`), `gpus`,
 `cpu_cores`, `memory_mb`. Unknown fields are rejected. There is deliberately
-**no** field for image, command or script, so the API cannot run arbitrary
-code.
+**no** field for image or command; `script_id` can only reference a script
+that was uploaded through the scripts API.
 
 ## Run the tests
 
@@ -152,6 +209,7 @@ backend/
     http/middleware/        request ID, access log, panic recovery
     dataset/                dataset model + upload/list/delete service
     job/                    job model, state machine, start/stop/reconcile service
+    script/                 user project scripts: upload/validate/list/delete + template
     storage/                ObjectStorage interface, S3 (SeaweedFS) + in-memory fake
     runner/                 JobRunner interface, mock runner, docker runner
     repository/             SQLite implementations of the dataset/job stores
@@ -160,12 +218,16 @@ backend/
 
 ## Known limitations (things the existing Python code imposes)
 
-- **Uploaded data is not really used by training yet.** `train.py` only reads
-  data via `--data sharded`, which treats every object under a prefix as one
-  sample and ignores file contents. A real data loader is future Python work.
+- **Built-in modes ignore uploaded data contents.** `--data sharded` treats
+  every object under a prefix as one sample. To really train on uploaded data,
+  use a project script (`script_id`), whose `get_dataset(data_dir)` reads it.
 - **Sharded mode needs one file per worker**, otherwise a worker with no data
-  would hang PyTorch's synchronisation. Since each upload is one file, jobs
-  with a dataset are limited to `workers=1` for now.
+  would hang PyTorch's synchronisation, so built-in sharded jobs are limited to
+  `workers=1`. Project-script jobs have no such limit: each worker downloads
+  the whole dataset and `DistributedSampler` gives it a different slice.
+- **Script validation in the backend is only a quick check** (the two
+  functions exist at top level). The authoritative check happens when the
+  training container imports the script, so a broken script fails at job time.
 - **"Workers" are processes in one container** (`torchrun --nproc_per_node`),
   on CPU with gloo. They are not separate pods or GPUs yet.
 - **S3 credentials are passed to `train.py` as command-line arguments**

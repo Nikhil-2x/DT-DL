@@ -92,6 +92,17 @@ func (d *Docker) RunArgs(spec TrainingSpec) []string {
 			"--dataset-local-dir", "/tmp/shard_data",
 		)
 	}
+	if spec.DataMode == "custom" {
+		args = append(args, "--script-bucket", spec.ScriptBucket, "--script-key", spec.ScriptKey)
+		if spec.HasDataset() {
+			args = append(args,
+				"--attach-dataset",
+				"--dataset-bucket", spec.DatasetBucket,
+				"--dataset-prefix", spec.DatasetPrefix,
+				"--dataset-local-dir", "/tmp/dataset",
+			)
+		}
+	}
 	return args
 }
 
