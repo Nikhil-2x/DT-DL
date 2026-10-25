@@ -14,13 +14,13 @@ type JobRepo struct{ db *sql.DB }
 func NewJobRepo(db *sql.DB) *JobRepo { return &JobRepo{db: db} }
 
 const jobCols = `id, name, dataset_id, image, entrypoint, data_mode, workers, epochs, gpus, cpu_cores, memory_mb,
-	status, error, checkpoint_location, output_location, created_at, updated_at, started_at, finished_at`
+	status, error, checkpoint_location, output_location, created_at, updated_at, started_at, finished_at, script_id`
 
 func (r *JobRepo) Create(ctx context.Context, j job.Job) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO jobs (`+jobCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := r.db.ExecContext(ctx, `INSERT INTO jobs (`+jobCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		j.ID, j.Name, j.DatasetID, j.Image, j.Entrypoint, j.DataMode, j.Workers, j.Epochs, j.GPUs, j.CPUCores, j.MemoryMB,
 		string(j.Status), j.Error, j.CheckpointLocation, j.OutputLocation,
-		formatTime(j.CreatedAt), formatTime(j.UpdatedAt), nullTime(j.StartedAt), nullTime(j.FinishedAt))
+		formatTime(j.CreatedAt), formatTime(j.UpdatedAt), nullTime(j.StartedAt), nullTime(j.FinishedAt), j.ScriptID)
 	return err
 }
 
@@ -61,6 +61,13 @@ func (r *JobRepo) CountUnfinishedByDataset(ctx context.Context, datasetID string
 	return n, err
 }
 
+func (r *JobRepo) CountUnfinishedByScript(ctx context.Context, scriptID string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE script_id = ? AND status NOT IN ('STOPPED','COMPLETED','FAILED')`, scriptID).Scan(&n)
+	return n, err
+}
+
 func (r *JobRepo) query(ctx context.Context, q string, args ...any) ([]job.Job, error) {
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -84,7 +91,7 @@ func scanJob(s scanner) (job.Job, error) {
 	var started, finished sql.NullString
 	if err := s.Scan(&j.ID, &j.Name, &j.DatasetID, &j.Image, &j.Entrypoint, &j.DataMode, &j.Workers, &j.Epochs,
 		&j.GPUs, &j.CPUCores, &j.MemoryMB, &status, &j.Error, &j.CheckpointLocation, &j.OutputLocation,
-		&created, &updated, &started, &finished); err != nil {
+		&created, &updated, &started, &finished, &j.ScriptID); err != nil {
 		return job.Job{}, err
 	}
 	var err error

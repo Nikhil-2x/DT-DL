@@ -20,7 +20,9 @@ type Config struct {
 	S3Region         string
 	DatasetBucket    string
 	CheckpointBucket string
+	ScriptBucket     string
 	MaxUploadBytes   int64
+	MaxScriptBytes   int64
 
 	// Runner is "mock" or "docker".
 	Runner            string
@@ -77,7 +79,9 @@ func Load(getenv func(string) string) (Config, error) {
 		S3Region:         str("S3_REGION", "us-east-1"),
 		DatasetBucket:    str("DATASET_BUCKET", "datasets"),
 		CheckpointBucket: str("CHECKPOINT_BUCKET", "checkpoints"),
+		ScriptBucket:     str("SCRIPT_BUCKET", "scripts"),
 		MaxUploadBytes:   integer("MAX_UPLOAD_BYTES", 10<<30),
+		MaxScriptBytes:   integer("MAX_SCRIPT_BYTES", 1<<20),
 
 		Runner:            strings.ToLower(str("RUNNER", "mock")),
 		TrainingImage:     str("TRAINING_IMAGE", "ml-runner:dev"),

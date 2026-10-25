@@ -18,7 +18,7 @@ var ErrNotFound = errors.New("runner: job not found")
 // cannot supply commands; they only pick parameters of a known script.
 var AllowedEntrypoints = map[string]bool{"train.py": true}
 
-var validDataModes = map[string]bool{"synthetic": true, "cifar10": true, "sharded": true}
+var validDataModes = map[string]bool{"synthetic": true, "cifar10": true, "sharded": true, "custom": true}
 
 // safeToken matches values that are safe to pass as a single CLI argument or
 // container name component: no leading dash, no whitespace or shell syntax.
@@ -39,11 +39,16 @@ type TrainingSpec struct {
 	Entrypoint string
 	Workers    int // torchrun --nproc_per_node
 	Epochs     int
-	DataMode   string // synthetic | cifar10 | sharded
+	DataMode   string // synthetic | cifar10 | sharded | custom
 
-	// Only for DataMode == "sharded".
+	// DataMode "sharded": required. DataMode "custom": optional (the whole
+	// dataset is downloaded and handed to the user's get_dataset()).
 	DatasetBucket string
 	DatasetPrefix string
+
+	// Only for DataMode == "custom": the user's project script in object storage.
+	ScriptBucket string
+	ScriptKey    string
 
 	CheckpointBucket string
 	Resources        Resources
@@ -78,8 +83,19 @@ func (s TrainingSpec) Validate() error {
 			return errors.New("sharded data mode needs a valid dataset bucket and prefix")
 		}
 	}
+	if s.DataMode == "custom" {
+		if !safeToken.MatchString(s.ScriptBucket) || !safeToken.MatchString(s.ScriptKey) {
+			return errors.New("custom data mode needs a valid script bucket and key")
+		}
+		if s.HasDataset() && (!safeToken.MatchString(s.DatasetBucket) || !safeToken.MatchString(s.DatasetPrefix)) {
+			return errors.New("invalid dataset bucket or prefix")
+		}
+	}
 	return nil
 }
+
+// HasDataset reports whether a dataset is attached (custom mode).
+func (s TrainingSpec) HasDataset() bool { return s.DatasetBucket != "" || s.DatasetPrefix != "" }
 
 type State string
 

@@ -17,6 +17,7 @@ import (
 	"dtdl/backend/internal/job"
 	"dtdl/backend/internal/repository"
 	"dtdl/backend/internal/runner"
+	"dtdl/backend/internal/script"
 	"dtdl/backend/internal/storage"
 )
 
@@ -45,8 +46,14 @@ func newEnv(t *testing.T, maxUpload int64) *env {
 		Image: "ml-runner:dev", Entrypoint: "train.py", CheckpointBucket: "checkpoints", MaxWorkers: 8,
 	}, log)
 	ds.SetUsageChecker(js)
+	sc := script.NewService(repository.NewScriptRepo(db), store, "scripts", 1<<20, log)
+	js.SetScripts(sc)
+	js.SetArtifacts(store, "checkpoints")
+	sc.SetUsageChecker(js)
 
-	srv := httptest.NewServer(handlers.NewRouter(handlers.Deps{Datasets: ds, Jobs: js, MaxUploadBytes: maxUpload, Log: log}))
+	srv := httptest.NewServer(handlers.NewRouter(handlers.Deps{
+		Datasets: ds, Jobs: js, Scripts: sc, MaxUploadBytes: maxUpload, MaxScriptBytes: 1 << 20, Log: log,
+	}))
 	t.Cleanup(srv.Close)
 	return &env{srv, js, store, mock, logs}
 }

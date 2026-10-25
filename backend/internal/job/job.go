@@ -52,6 +52,7 @@ type Job struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	DatasetID  string `json:"dataset_id,omitempty"`
+	ScriptID   string `json:"script_id,omitempty"`
 	Image      string `json:"image"`
 	Entrypoint string `json:"entrypoint"`
 	DataMode   string `json:"data_mode"`
@@ -86,4 +87,6 @@ type Repository interface {
 	ListByStatus(ctx context.Context, statuses ...Status) ([]Job, error)
 	// CountUnfinishedByDataset counts non-terminal jobs using the dataset.
 	CountUnfinishedByDataset(ctx context.Context, datasetID string) (int, error)
+	// CountUnfinishedByScript counts non-terminal jobs using the script.
+	CountUnfinishedByScript(ctx context.Context, scriptID string) (int, error)
 }

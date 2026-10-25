@@ -31,6 +31,9 @@ DML/
     data.py                     Where training data comes from (fake data by default, or real CIFAR-10)
     storage.py                  Save/load checkpoints - works with local disk OR shared network storage
     train.py                    THE MAIN FILE - runs the actual distributed training
+    project_loader.py           Plug-in contract: loads a USER'S OWN model/dataset script (--data custom)
+    examples/                   csv_classifier.py (a sample user project) + make_blobs_csv.py (sample data)
+    test_project_loader.py      Tests for the plug-in contract (python test_project_loader.py)
     dataset_shard.py            Splits a dataset so each worker downloads only ITS slice, not the whole thing
     make_demo_dataset.py        Uploads 100 sample files to storage, for testing dataset_shard.py
     dataset_api.py              A basic website/API to upload files - proves "upload button" works
@@ -202,6 +205,34 @@ Uploads a test file, downloads it back, and checks the bytes match exactly.
 Good first thing to run if something else seems broken.
 
 ---
+
+### Train your own model and data (plug-in contract)
+
+`--data custom` trains a Python file you provide instead of the built-in CNN.
+The file defines `build_model()` and `get_dataset(data_dir)` (plus optional
+`build_optimizer(model, lr)` and `build_loss()`); everything distributed is
+still done by `train.py`. The full contract is the docstring of
+`project_loader.py`.
+
+The easy way to use it is through the backend (see `backend/README.md`):
+upload the script and your data, then create a job with `script_id` and
+`dataset_id`. Try it with `examples/csv_classifier.py` and the CSV from
+`python examples/make_blobs_csv.py`, or the image example `image_classifier.py` with
+`shapes.zip` (from `python examples/make_shapes_dataset.py`).
+
+By hand, `--data custom --script-path <file.py>` reads the script from disk,
+and `--attach-dataset --dataset-bucket B --dataset-prefix P` downloads a
+dataset from storage into the folder passed to `get_dataset()`:
+
+```bash
+docker run --rm -v "$(pwd):/workspace" -w /workspace ml-runner:dev \
+  bash -c "torchrun --nproc_per_node=4 train.py --epochs 5 --run-id csv-demo \
+           --data custom --script-path examples/csv_classifier.py \
+           --attach-dataset --dataset-bucket datasets --dataset-prefix <dataset-id>/ \
+           --dataset-local-dir /tmp/dataset --s3-endpoint http://host.docker.internal:8333"
+```
+
+Check the contract without Docker or storage: `python test_project_loader.py`.
 
 ## Known issues & decisions we had to make along the way
 

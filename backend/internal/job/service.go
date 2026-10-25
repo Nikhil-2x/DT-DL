@@ -15,11 +15,18 @@ import (
 	"dtdl/backend/internal/dataset"
 	"dtdl/backend/internal/ids"
 	"dtdl/backend/internal/runner"
+	"dtdl/backend/internal/script"
+	"dtdl/backend/internal/storage"
 )
 
 // DatasetLookup is the slice of the dataset service the job service needs.
 type DatasetLookup interface {
 	Get(ctx context.Context, id string) (dataset.Dataset, error)
+}
+
+// ScriptLookup is the slice of the script service the job service needs.
+type ScriptLookup interface {
+	Get(ctx context.Context, id string) (script.Script, error)
 }
 
 type Config struct {
@@ -32,8 +39,14 @@ type Config struct {
 type Service struct {
 	repo     Repository
 	datasets DatasetLookup
+	scripts  ScriptLookup // set via SetScripts; nil disables custom projects
 	runner   runner.JobRunner
 	cfg      Config
+
+	// checkpoint listing/download; set via SetArtifacts
+	artifacts      storage.ObjectStorage
+	artifactBucket string
+
 	log      *slog.Logger
 	now      func() time.Time
 
@@ -50,9 +63,10 @@ func NewService(repo Repository, datasets DatasetLookup, r runner.JobRunner, cfg
 type CreateInput struct {
 	Name      string
 	DatasetID string
+	ScriptID  string // user project script; implies data_mode "custom"
 	Epochs    int
 	Workers   int    // default 1
-	DataMode  string // default: sharded if DatasetID set, else synthetic
+	DataMode  string // default: custom if ScriptID set, sharded if DatasetID set, else synthetic
 	GPUs      int
 	CPUCores  int
 	MemoryMB  int
@@ -76,6 +90,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Job, error) {
 	if in.GPUs < 0 || in.GPUs > 8 || in.CPUCores < 0 || in.CPUCores > 256 || in.MemoryMB < 0 || in.MemoryMB > 4<<20 {
 		return Job{}, apperr.Invalid("INVALID_RESOURCES", "gpus, cpu_cores or memory_mb out of range")
 	}
+	if in.ScriptID != "" {
+		if in.DataMode == "" {
+			in.DataMode = "custom"
+		}
+		if in.DataMode != "custom" {
+			return Job{}, apperr.Invalid("INVALID_DATA_MODE", "script_id can only be used with data_mode \"custom\"")
+		}
+	} else if in.DataMode == "custom" {
+		return Job{}, apperr.Invalid("INVALID_DATA_MODE", "data_mode \"custom\" requires script_id")
+	}
 	if in.DataMode == "" {
 		in.DataMode = "synthetic"
 		if in.DatasetID != "" {
@@ -83,6 +107,21 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Job, error) {
 		}
 	}
 	switch in.DataMode {
+	case "custom":
+		// The user's get_dataset() reads the whole dataset folder and
+		// DistributedSampler splits it in memory, so any worker count works.
+		if err := s.checkScript(ctx, in.ScriptID); err != nil {
+			return Job{}, err
+		}
+		if in.DatasetID != "" {
+			ds, err := s.datasets.Get(ctx, in.DatasetID)
+			if err != nil {
+				return Job{}, err
+			}
+			if ds.Status != dataset.StatusReady {
+				return Job{}, apperr.Conflict("DATASET_NOT_READY", "dataset is not ready")
+			}
+		}
 	case "synthetic", "cifar10":
 		if in.DatasetID != "" {
 			return Job{}, apperr.Invalid("INVALID_DATA_MODE", "dataset_id can only be used with data_mode \"sharded\"")
@@ -111,7 +150,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Job, error) {
 	now := s.now().UTC()
 	id := ids.New()
 	j := Job{
-		ID: id, Name: in.Name, DatasetID: in.DatasetID,
+		ID: id, Name: in.Name, DatasetID: in.DatasetID, ScriptID: in.ScriptID,
 		Image: s.cfg.Image, Entrypoint: s.cfg.Entrypoint, DataMode: in.DataMode,
 		Workers: in.Workers, Epochs: in.Epochs, GPUs: in.GPUs, CPUCores: in.CPUCores, MemoryMB: in.MemoryMB,
 		Status:             StatusPending,
@@ -223,6 +262,27 @@ func (s *Service) Logs(ctx context.Context, id string, tail int) (io.ReadCloser,
 		return nil, apperr.Internal(err)
 	}
 	return rc, nil
+}
+
+// SetScripts enables custom (user-script) projects.
+func (s *Service) SetScripts(l ScriptLookup) { s.scripts = l }
+
+func (s *Service) scriptFor(ctx context.Context, id string) (script.Script, error) {
+	if s.scripts == nil {
+		return script.Script{}, apperr.Invalid("SCRIPTS_DISABLED", "custom scripts are not enabled on this server")
+	}
+	return s.scripts.Get(ctx, id)
+}
+
+func (s *Service) checkScript(ctx context.Context, id string) error {
+	_, err := s.scriptFor(ctx, id)
+	return err
+}
+
+// ScriptInUse implements script.UsageChecker.
+func (s *Service) ScriptInUse(ctx context.Context, scriptID string) (bool, error) {
+	n, err := s.repo.CountUnfinishedByScript(ctx, scriptID)
+	return n > 0, err
 }
 
 // DatasetInUse implements dataset.UsageChecker.
@@ -339,7 +399,14 @@ func (s *Service) buildSpec(ctx context.Context, j Job) (runner.TrainingSpec, er
 		CheckpointBucket: s.cfg.CheckpointBucket,
 		Resources:        runner.Resources{CPUCores: j.CPUCores, MemoryMB: j.MemoryMB, GPUs: j.GPUs},
 	}
-	if j.DataMode == "sharded" {
+	if j.DataMode == "custom" {
+		sc, err := s.scriptFor(ctx, j.ScriptID)
+		if err != nil {
+			return spec, err
+		}
+		spec.ScriptBucket, spec.ScriptKey = sc.Bucket, sc.Key
+	}
+	if j.DataMode == "sharded" || (j.DataMode == "custom" && j.DatasetID != "") {
 		ds, err := s.datasets.Get(ctx, j.DatasetID)
 		if err != nil {
 			return spec, err

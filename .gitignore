@@ -1,0 +1,36 @@
+# Runtime state of the Go backend (SQLite database, created on first start)
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# Local SeaweedFS S3 identity file from experiments; not used by the code
+backend/seaweed-s3-config.json
+
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Trained models and generated datasets (large, recreated by running the project)
+*.pt
+*.pth
+*.zip
+Shared-storage/ml-runner/checkpoints/
+Shared-storage/ml-runner/examples/blobs.csv
+
+# Go build output
+*.exe
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
